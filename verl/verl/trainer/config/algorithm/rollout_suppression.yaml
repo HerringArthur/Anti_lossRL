@@ -1,0 +1,42 @@
+# Success-conditioned rollout suppression config.
+# Pushes model away from historically successful trajectories
+# while maintaining correctness constraints.
+# See: strategy_exploration_plan.md
+
+_target_: verl.trainer.config.algorithm.RolloutSuppressionConfig
+
+# Whether to enable rollout suppression
+enable: false
+
+# Suppression strength coefficient
+beta: 0.03
+
+# Margin for relu(s_theta - margin). null = no margin.
+# Recommended: -4.0, -6.0, -8.0
+margin: null
+
+# Whether to length-normalize the anti-logprob
+length_normalize: true
+
+# Run anti-loss update every N normal PPO updates (1 = every step)
+anti_update_freq: 1
+
+# Per-prompt success buffer configuration
+buffer:
+
+  _target_: verl.trainer.config.algorithm.SuccessBufferConfig
+
+  # Maximum number of successful rollouts stored per prompt
+  max_rollouts_per_prompt: 16
+
+  # Number of old rollouts to sample per update step
+  sample_old_rollouts_per_update: 4
+
+  # Only store verifier-confirmed correct rollouts
+  store_only_correct: true
+
+  # Deduplicate by exact token sequence
+  deduplicate_exact_tokens: true
+
+  # Eviction strategy: "fifo" or "lowest_logprob"
+  eviction: fifo
