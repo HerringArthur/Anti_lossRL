@@ -195,20 +195,43 @@ def load_model_and_tokenizer(
 # ---------------------------------------------------------------------------
 
 
+def _detect_data_format(data_path: str) -> str:
+    """Detect file format from extension. Returns 'jsonl' or 'parquet'."""
+    ext = Path(data_path).suffix.lower()
+    if ext == ".jsonl" or ext == ".json":
+        return "jsonl"
+    if ext == ".parquet" or ext == ".pq":
+        return "parquet"
+    raise ValueError(f"Unsupported data format: {ext}. Expected .jsonl or .parquet")
+
+
 def load_test_prompts(
     data_path: str,
     num_prompts: int,
     tokenizer,
     max_prompt_length: int = 1024,
+    seed: int = 42,
+    data_format: str = "jsonl",
 ) -> list[dict]:
-    """Load prompts from parquet, return list of prompt dicts."""
+    """Load prompts from jsonl or parquet, randomly sample, return list of prompt dicts."""
     import pandas as pd
 
-    logger.info("Loading test data from %s", data_path)
-    df = pd.read_parquet(data_path)
+    # Auto-detect format from extension, or use explicit data_format
+    detected = _detect_data_format(data_path)
+    fmt = data_format if data_format else detected
+    logger.info("Loading test data from %s (format: %s)", data_path, fmt)
 
-    if num_prompts > 0:
-        df = df.head(num_prompts)
+    if fmt == "jsonl":
+        df = pd.read_json(data_path, lines=True)
+    else:
+        df = pd.read_parquet(data_path)
+
+    if num_prompts > 0 and num_prompts < len(df):
+        rng = np.random.default_rng(seed)
+        indices = rng.choice(len(df), size=num_prompts, replace=False)
+        df = df.iloc[list(indices)].reset_index(drop=True)
+    elif num_prompts > 0:
+        logger.info("Requested %d prompts but dataset has only %d rows", num_prompts, len(df))
 
     prompts = []
     for idx, row in df.iterrows():
@@ -240,7 +263,7 @@ def load_test_prompts(
             }
         )
 
-    logger.info("Loaded %d prompts", len(prompts))
+    logger.info("Loaded %d prompts (randomly sampled from %d)", len(prompts), len(df))
     return prompts
 
 
@@ -722,6 +745,8 @@ def run_validation(args) -> dict:
         args.num_prompts,
         tokenizer,
         args.max_prompt_length,
+        seed=args.seed,
+        data_format=args.data_format,
     )
     results["num_prompts_loaded"] = len(prompts)
     results["checks"]["data_loaded"] = len(prompts) > 0
@@ -849,7 +874,14 @@ def parse_args():
         "--test_data_path",
         type=str,
         required=True,
-        help="Path to parquet file with test prompts (columns: prompt, reward_model)",
+        help="Path to jsonl (default) or parquet file with test prompts (columns: prompt, reward_model)",
+    )
+    parser.add_argument(
+        "--data_format",
+        type=str,
+        default="jsonl",
+        choices=["jsonl", "parquet"],
+        help="Data file format: jsonl or parquet (default: jsonl, auto-detected from extension if omitted)",
     )
     parser.add_argument(
         "--num_prompts",
