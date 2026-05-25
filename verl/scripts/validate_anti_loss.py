@@ -32,7 +32,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -42,6 +42,22 @@ from transformers import AutoModelForCausalLM
 
 from verl.utils import hf_tokenizer
 from verl.utils.reward_score import default_compute_score
+
+
+class NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder that converts numpy scalars to native Python types."""
+
+    def default(self, obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
 
 # ---------------------------------------------------------------------------
 # Inline Success Buffer (mirrors verl/trainer/ppo/success_buffer.py — Phase 2)
@@ -205,13 +221,49 @@ def _detect_data_format(data_path: str) -> str:
     raise ValueError(f"Unsupported data format: {ext}. Expected .jsonl or .parquet")
 
 
+def _resolve_score_source(data_source: str, data_path: str = "") -> str:
+    """Map a raw data_source field to a score source recognised by default_compute_score.
+
+    Tries the data_source field first, then falls back to the data_path filename.
+    """
+    ds_lower = data_source.lower()
+
+    if "gsm8k" in ds_lower:
+        return "openai/gsm8k"
+    if "math" in ds_lower:
+        return "lighteval/MATH"
+    if "geometry3k" in ds_lower:
+        return "hiyouga/geometry3k"
+    if any(k in ds_lower for k in ("aime", "numina", "math_dapo")):
+        return data_source
+
+    # Try to infer from the data path
+    path_lower = data_path.lower()
+    if "gsm8k" in path_lower:
+        logger.info("Inferred score source 'openai/gsm8k' from data path")
+        return "openai/gsm8k"
+    if "math" in path_lower:
+        logger.info("Inferred score source 'lighteval/MATH' from data path")
+        return "lighteval/MATH"
+
+    # If the data_source looks like a known format, pass it through
+    if "/" in data_source or data_source.startswith("openai"):
+        return data_source
+
+    raise ValueError(
+        f"Cannot resolve score source for data_source='{data_source}'. "
+        f"Use --data_source to specify one of: openai/gsm8k, lighteval/MATH, "
+        f"hiyouga/geometry3k, etc."
+    )
+
+
 def load_test_prompts(
     data_path: str,
     num_prompts: int,
     tokenizer,
     max_prompt_length: int = 1024,
+    data_format: str = "",
     seed: int = 42,
-    data_format: str = "jsonl",
 ) -> list[dict]:
     """Load prompts from jsonl or parquet, randomly sample, return list of prompt dicts."""
     import pandas as pd
@@ -338,6 +390,8 @@ def score_rollouts(
     prompts: list[dict],
     all_rollouts: list[list[dict]],
     tokenizer,
+    data_path: str = "",
+    data_source_override: str = "",
 ) -> tuple[list[dict], list[dict], float]:
     """Score all rollouts, separate into correct and incorrect."""
     correct = []
@@ -350,12 +404,10 @@ def score_rollouts(
         data_source = prompt["data_source"]
         ground_truth = prompt["ground_truth"]
 
-        if "gsm8k" in str(data_source):
-            score_source = "openai/gsm8k"
-        elif "math" in str(data_source).lower():
-            score_source = "lighteval/MATH"
+        if data_source_override:
+            score_source = data_source_override
         else:
-            score_source = str(data_source)
+            score_source = _resolve_score_source(str(data_source), data_path)
 
         for r in rollouts:
             total += 1
@@ -561,7 +613,7 @@ def compute_gradient(
     else:
         param_list = _get_trainable_params(model)
 
-    grads = torch.autograd.grad(loss, param_list, retain_graph=(loss_fn == compute_anti_loss))
+    grads = torch.autograd.grad(loss, param_list, retain_graph=False)
 
     grad_parts = []
     for g in grads:
@@ -745,8 +797,8 @@ def run_validation(args) -> dict:
         args.num_prompts,
         tokenizer,
         args.max_prompt_length,
-        seed=args.seed,
         data_format=args.data_format,
+        seed=args.seed,
     )
     results["num_prompts_loaded"] = len(prompts)
     results["checks"]["data_loaded"] = len(prompts) > 0
@@ -774,11 +826,15 @@ def run_validation(args) -> dict:
     for prompt_rollouts in all_rollouts:
         texts = {r["response_text"] for r in prompt_rollouts}
         unique_counts.append(len(texts))
-    results["avg_unique_responses"] = np.mean(unique_counts)
+    results["avg_unique_responses"] = float(np.mean(unique_counts))
     results["checks"]["generation_diverse"] = results["avg_unique_responses"] > 1
 
     # --- Check 4: Score rollouts ---
-    correct, incorrect, success_rate = score_rollouts(prompts, all_rollouts, tokenizer)
+    correct, incorrect, success_rate = score_rollouts(
+        prompts, all_rollouts, tokenizer,
+        data_path=args.test_data_path,
+        data_source_override=args.data_source,
+    )
     results["correct_rollouts"] = len(correct)
     results["incorrect_rollouts"] = len(incorrect)
     results["success_rate"] = success_rate
@@ -867,21 +923,28 @@ def parse_args():
     parser.add_argument(
         "--model_path",
         type=str,
-        required=True,
-        help="Path to HuggingFace model or local directory",
+        default="",
+        help="Path to HuggingFace model or local directory (env: MODEL_PATH)",
     )
     parser.add_argument(
         "--test_data_path",
         type=str,
-        required=True,
-        help="Path to jsonl (default) or parquet file with test prompts (columns: prompt, reward_model)",
+        default="",
+        help="Path to jsonl or parquet file with test prompts (env: GSM8K_TEST_FILE)",
     )
     parser.add_argument(
         "--data_format",
         type=str,
-        default="jsonl",
-        choices=["jsonl", "parquet"],
-        help="Data file format: jsonl or parquet (default: jsonl, auto-detected from extension if omitted)",
+        default="",
+        choices=["jsonl", "parquet", ""],
+        help="Data file format: jsonl or parquet (default: auto-detect from extension)",
+    )
+    parser.add_argument(
+        "--data_source",
+        type=str,
+        default="",
+        help="Override data_source for scoring (e.g., openai/gsm8k, lighteval/MATH). "
+        "Auto-detected from data if not set.",
     )
     parser.add_argument(
         "--num_prompts",
@@ -968,6 +1031,15 @@ def main():
     args = parse_args()
     setup_logging()
 
+    args.model_path = args.model_path or os.environ.get("MODEL_PATH", "")
+    args.test_data_path = args.test_data_path or os.environ.get("GSM8K_TEST_FILE", "")
+    if not args.model_path:
+        logger.error("--model_path is required (or set MODEL_PATH env var)")
+        sys.exit(1)
+    if not args.test_data_path:
+        logger.error("--test_data_path is required (or set GSM8K_TEST_FILE env var)")
+        sys.exit(1)
+
     os.makedirs(args.output_dir, exist_ok=True)
 
     logger.info("=" * 70)
@@ -983,7 +1055,7 @@ def main():
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = Path(args.output_dir) / f"validate_anti_loss_{ts}.json"
     with open(output_path, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(results, f, indent=2, cls=NumpyEncoder)
 
     logger.info("Results saved to %s", output_path)
 
