@@ -488,6 +488,67 @@ def build_success_buffer_from_rollouts(correct_rollouts: list[dict]) -> PerPromp
 # ---------------------------------------------------------------------------
 
 
+def save_rollouts(
+    correct: list[dict],
+    incorrect: list[dict],
+    prompts: list[dict],
+    output_dir: str,
+    timestamp: str,
+):
+    """Save all rollouts (correct + incorrect) and prompts as JSONL files."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    def _serializable(entry: dict, keep_ids: bool = False) -> dict:
+        """Strip non-serializable fields from a rollout entry."""
+        out = {}
+        for k, v in entry.items():
+            if k == "raw_row":
+                continue
+            if isinstance(v, np.integer):
+                out[k] = int(v)
+            elif isinstance(v, np.floating):
+                out[k] = float(v)
+            elif isinstance(v, np.ndarray):
+                out[k] = v.tolist()
+            elif isinstance(v, torch.Tensor):
+                out[k] = v.tolist()
+            else:
+                out[k] = v
+        return out
+
+    # Save correct rollouts
+    correct_path = Path(output_dir) / f"rollouts_correct_{timestamp}.jsonl"
+    with open(correct_path, "w") as f:
+        for entry in correct:
+            f.write(json.dumps(_serializable(entry), cls=NumpyEncoder) + "\n")
+    logger.info("Saved %d correct rollouts to %s", len(correct), correct_path)
+
+    # Save incorrect rollouts
+    incorrect_path = Path(output_dir) / f"rollouts_incorrect_{timestamp}.jsonl"
+    with open(incorrect_path, "w") as f:
+        for entry in incorrect:
+            f.write(json.dumps(_serializable(entry), cls=NumpyEncoder) + "\n")
+    logger.info("Saved %d incorrect rollouts to %s", len(incorrect), incorrect_path)
+
+    # Save prompts
+    prompts_path = Path(output_dir) / f"prompts_{timestamp}.jsonl"
+    with open(prompts_path, "w") as f:
+        for p in prompts:
+            f.write(
+                json.dumps(
+                    {
+                        "uid": p["uid"],
+                        "prompt_text": p["prompt_text"],
+                        "ground_truth": str(p["ground_truth"]) if p["ground_truth"] is not None else None,
+                        "data_source": p["data_source"],
+                    },
+                    cls=NumpyEncoder,
+                )
+                + "\n"
+            )
+    logger.info("Saved %d prompts to %s", len(prompts), prompts_path)
+
+
 def compute_response_logprobs(
     model: AutoModelForCausalLM,
     full_ids: torch.Tensor,  # (1, seq_len) — prompt + response
@@ -840,6 +901,9 @@ def run_validation(args) -> dict:
     results["success_rate"] = success_rate
     results["checks"]["scoring_valid"] = success_rate > 0 and success_rate < 1
 
+    # --- Save rollouts to disk ---
+    save_rollouts(correct, incorrect, prompts, args.output_dir, args.output_ts)
+
     if not correct:
         logger.error(
             "No correct rollouts found. Cannot validate anti-loss. "
@@ -1049,11 +1113,11 @@ def main():
     logger.info("Prompts: %d, Rollouts/prompt: %d", args.num_prompts, args.rollouts_per_prompt)
     logger.info("=" * 70)
 
+    args.output_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     results = run_validation(args)
 
     # Save results
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = Path(args.output_dir) / f"validate_anti_loss_{ts}.json"
+    output_path = Path(args.output_dir) / f"validate_anti_loss_{args.output_ts}.json"
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2, cls=NumpyEncoder)
 
