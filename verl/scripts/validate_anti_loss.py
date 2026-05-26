@@ -75,6 +75,7 @@ class SuccessBufferEntry:
     reward: float
     created_step: int
     data_source: str
+    current_logprob: float | None = None
 
 
 @dataclass
@@ -91,39 +92,80 @@ class PerPromptSuccessBuffer:
         self.config = config or SuccessBufferConfig()
         self._buffers: dict[str, list[SuccessBufferEntry]] = defaultdict(list)
 
-    def _token_signature(self, entry: SuccessBufferEntry) -> tuple[int, ...]:
-        return tuple(entry.response_tokens)
-
     def add(self, entry: SuccessBufferEntry) -> bool:
         buf = self._buffers[entry.prompt_uid]
 
         if self.config.deduplicate_exact_tokens:
-            sig = self._token_signature(entry)
-            if any(self._token_signature(e) == sig for e in buf):
-                return False
+            for existing in buf:
+                if existing.response_tokens == entry.response_tokens:
+                    return False
 
         if len(buf) >= self.config.max_rollouts_per_prompt:
-            if self.config.eviction == "fifo":
-                buf.pop(0)
-            elif self.config.eviction == "lowest_logprob":
-                buf.pop(0)
+            self._evict(entry.prompt_uid)
 
         buf.append(entry)
         return True
 
+    def _evict(self, prompt_uid: str):
+        buf = self._buffers[prompt_uid]
+        if not buf:
+            return
+
+        if self.config.eviction == "lowest_logprob":
+            idx = min(
+                range(len(buf)),
+                key=lambda i: buf[i].current_logprob
+                if buf[i].current_logprob is not None
+                else float("-inf"),
+            )
+        else:
+            idx = 0
+
+        buf.pop(idx)
+
     def sample_old_rollouts(
         self, prompt_uids: list[str], n: int
     ) -> list[SuccessBufferEntry]:
-        sampled = []
+        all_candidates: list[SuccessBufferEntry] = []
         for uid in prompt_uids:
             buf = self._buffers.get(uid, [])
-            if buf:
-                k = min(n, len(buf))
-                sampled.extend(random.sample(buf, k))
+            all_candidates.extend(buf)
+
+        if not all_candidates:
+            return []
+
+        if len(all_candidates) <= n:
+            return list(all_candidates)
+
+        by_prompt: dict[str, list[SuccessBufferEntry]] = {}
+        for entry in all_candidates:
+            by_prompt.setdefault(entry.prompt_uid, []).append(entry)
+
+        eligible = list(by_prompt.keys())
+        random.shuffle(eligible)
+        sampled: list[SuccessBufferEntry] = []
+        remaining = n
+        for idx, uid in enumerate(eligible):
+            max_from_this = min(
+                len(by_prompt[uid]),
+                max(1, remaining // (len(eligible) - idx)),
+            )
+            sampled.extend(random.sample(by_prompt[uid], max_from_this))
+            remaining -= max_from_this
+            if remaining <= 0:
+                break
+
         return sampled
 
     def get_buffer_size(self, prompt_uid: str) -> int:
         return len(self._buffers.get(prompt_uid, []))
+
+    def update_logprob(self, prompt_uid: str, response_tokens: list[int], logprob: float):
+        buf = self._buffers.get(prompt_uid, [])
+        for entry in buf:
+            if entry.response_tokens == response_tokens:
+                entry.current_logprob = logprob
+                break
 
     def all_entries(self) -> list[SuccessBufferEntry]:
         entries = []
@@ -143,6 +185,7 @@ class PerPromptSuccessBuffer:
                         "reward": e.reward,
                         "created_step": e.created_step,
                         "data_source": e.data_source,
+                        "current_logprob": e.current_logprob,
                     }
                     for e in buf
                 ]
@@ -343,6 +386,22 @@ def generate_rollouts(
         top_p,
     )
 
+    # Debug: print EOS-related token IDs from tokenizer and model config
+    tok_eos = tokenizer.eos_token_id
+    tok_pad = tokenizer.pad_token_id
+    model_eos = getattr(model.config, "eos_token_id", None)
+    gen_eos = getattr(model.generation_config, "eos_token_id", None) if hasattr(model, "generation_config") else None
+    logger.info(
+        "EOS debug — tokenizer.eos_token_id=%s, tokenizer.pad_token_id=%s, "
+        "model.config.eos_token_id=%s, model.generation_config.eos_token_id=%s",
+        tok_eos, tok_pad, model_eos, gen_eos,
+    )
+    # Handle case where eos_token_id is a list (some tokenizers return [id])
+    eos_id = tok_eos
+    if isinstance(eos_id, list):
+        eos_id = eos_id[0] if eos_id else None
+        logger.info("eos_token_id is a list: %s, using first element: %s", tok_eos, eos_id)
+
     all_rollouts = []
 
     for prompt in tqdm(prompts, desc="Generating rollouts"):
@@ -357,8 +416,8 @@ def generate_rollouts(
             temperature=temperature,
             top_p=top_p,
             do_sample=True,
-            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tok_pad or eos_id,
+            eos_token_id=eos_id,
         )
 
         prompt_rollouts = []
@@ -366,6 +425,16 @@ def generate_rollouts(
             full_ids = outputs[i].tolist()
             response_ids = full_ids[prompt_len:]
             response_text = tokenizer.decode(response_ids, skip_special_tokens=True)
+
+            # Debug: check if EOS appears in the generated response
+            eos_count = response_ids.count(eos_id) if eos_id is not None else 0
+            if eos_count == 0 and len(response_ids) == max_response_length:
+                logger.warning(
+                    "Prompt %s rollout %d: no EOS token found, "
+                    "response truncated at max_response_length=%d. "
+                    "First 50 tokens of response: %s",
+                    prompt["uid"], i, max_response_length, response_ids[:50],
+                )
 
             prompt_rollouts.append(
                 {
