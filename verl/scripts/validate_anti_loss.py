@@ -215,6 +215,7 @@ def setup_logging(log_file: str | None = None):
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=handlers,
+        force=True,
     )
 
 
