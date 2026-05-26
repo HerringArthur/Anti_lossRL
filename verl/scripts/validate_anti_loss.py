@@ -206,11 +206,15 @@ class PerPromptSuccessBuffer:
 # ---------------------------------------------------------------------------
 
 
-def setup_logging():
+def setup_logging(log_file: str | None = None):
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    if log_file is not None:
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
+        handlers=handlers,
     )
 
 
@@ -1162,7 +1166,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-    setup_logging()
 
     args.model_path = args.model_path or os.environ.get("MODEL_PATH", "")
     args.test_data_path = args.test_data_path or os.environ.get("GSM8K_TEST_FILE", "")
@@ -1175,6 +1178,10 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
+    args.output_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(args.output_dir, f"validate_anti_loss_{args.output_ts}.log")
+    setup_logging(log_file=log_file)
+
     logger.info("=" * 70)
     logger.info("Phase 1 — Anti-Loss Validation")
     logger.info("Model: %s", args.model_path)
@@ -1182,7 +1189,6 @@ def main():
     logger.info("Prompts: %d, Rollouts/prompt: %d", args.num_prompts, args.rollouts_per_prompt)
     logger.info("=" * 70)
 
-    args.output_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     results = run_validation(args)
 
     # Save results
