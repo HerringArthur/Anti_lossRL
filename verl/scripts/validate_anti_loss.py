@@ -429,7 +429,7 @@ def generate_rollouts(
         for i in range(rollouts_per_prompt):
             full_ids = outputs[i].tolist()
             response_ids = full_ids[prompt_len:]
-            response_text = tokenizer.decode(response_ids, skip_special_tokens=True)
+            response_text = tokenizer.decode(response_ids, skip_special_tokens=False)
 
             # Debug: check if EOS appears in the generated response
             eos_count = response_ids.count(eos_id) if eos_id is not None else 0
