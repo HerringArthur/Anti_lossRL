@@ -402,7 +402,7 @@ def generate_rollouts(
         tok_eos, tok_pad, model_eos, gen_eos,
     )
     # Handle case where eos_token_id is a list (some tokenizers return [id])
-    eos_id = tok_eos
+    eos_id = model.generation_config.eos_token_id
     if isinstance(eos_id, list):
         eos_id = eos_id[0] if eos_id else None
         logger.info("eos_token_id is a list: %s, using first element: %s", tok_eos, eos_id)
