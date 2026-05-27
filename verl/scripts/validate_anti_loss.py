@@ -401,15 +401,11 @@ def generate_rollouts(
         "model.config.eos_token_id=%s, model.generation_config.eos_token_id=%s",
         tok_eos, tok_pad, model_eos, gen_eos,
     )
-    # eos_token_id may be a single int or a list — model.generate() accepts both.
-    # We pass the full list so that generation stops on any of the EOS tokens.
-    eos_ids = model.generation_config.eos_token_id
-    # Resolve a single token for padding (pad_token_id must be a scalar int)
-    if isinstance(eos_ids, list):
-        pad_eos = eos_ids[0] if eos_ids else None
-    else:
-        pad_eos = eos_ids
-    logger.info("eos_token_id=%s, pad fallback=%s", eos_ids, pad_eos)
+    # eos_token_id may be an int or a list[int]; keep as-is for model.generate()
+    eos_id = model.generation_config.eos_token_id
+    if isinstance(eos_id, list):
+        logger.info("eos_token_id is a list: %s", eos_id)
+    first_eos = eos_id[0] if isinstance(eos_id, list) else eos_id
 
     all_rollouts = []
 
@@ -425,8 +421,8 @@ def generate_rollouts(
             temperature=temperature,
             top_p=top_p,
             do_sample=True,
-            pad_token_id=tok_pad or pad_eos,
-            eos_token_id=eos_ids,
+            pad_token_id=tok_pad or first_eos,
+            eos_token_id=eos_id,
         )
 
         prompt_rollouts = []
@@ -435,13 +431,9 @@ def generate_rollouts(
             response_ids = full_ids[prompt_len:]
             response_text = tokenizer.decode(response_ids, skip_special_tokens=False)
 
-            # Debug: check if EOS appears in the generated response
-            if isinstance(eos_ids, list):
-                eos_count = sum(response_ids.count(eid) for eid in eos_ids)
-            elif eos_ids is not None:
-                eos_count = response_ids.count(eos_ids)
-            else:
-                eos_count = 0
+            # Debug: check if any EOS appears in the generated response
+            eos_ids_set = set(eos_id) if isinstance(eos_id, list) else {eos_id}
+            eos_count = sum(1 for tid in response_ids if tid in eos_ids_set)
             if eos_count == 0 and len(response_ids) == max_response_length:
                 logger.warning(
                     "Prompt %s rollout %d: no EOS token found, "
