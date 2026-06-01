@@ -429,11 +429,18 @@ def generate_rollouts(
         for i in range(rollouts_per_prompt):
             full_ids = outputs[i].tolist()
             response_ids = full_ids[prompt_len:]
-            response_text = tokenizer.decode(response_ids, skip_special_tokens=False)
 
-            # Debug: check if any EOS appears in the generated response
+            # Trim trailing EOS tokens so they don't drown the answer during
+            # scoring (gsm8k.extract_solution only looks at the last 300 chars).
             eos_ids_set = set(eos_id) if isinstance(eos_id, list) else {eos_id}
             eos_count = sum(1 for tid in response_ids if tid in eos_ids_set)
+            trim_idx = len(response_ids)
+            while trim_idx > 0 and response_ids[trim_idx - 1] in eos_ids_set:
+                trim_idx -= 1
+            trimmed_response_ids = response_ids[:trim_idx]
+
+            response_text_for_scoring = tokenizer.decode(trimmed_response_ids, skip_special_tokens=True)
+
             if eos_count == 0 and len(response_ids) == max_response_length:
                 logger.warning(
                     "Prompt %s rollout %d: no EOS token found, "
@@ -445,7 +452,7 @@ def generate_rollouts(
             prompt_rollouts.append(
                 {
                     "response_ids": response_ids,
-                    "response_text": response_text,
+                    "response_text": response_text_for_scoring,
                     "full_ids": full_ids,
                     "prompt_len": prompt_len,
                 }
