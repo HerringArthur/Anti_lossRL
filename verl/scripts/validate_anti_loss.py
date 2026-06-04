@@ -676,7 +676,7 @@ def compute_response_logprobs(
         shift_logits = logits[0, prompt_len - 1 : -1, :]  # (response_len, vocab)
         response_ids = full_ids[0, prompt_len:].to(device)  # (response_len,)
 
-        log_probs = F.log_softmax(shift_logits.float(), dim=-1)
+        log_probs = F.log_softmax(shift_logits, dim=-1)
         token_logprobs = log_probs.gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
 
         mean_logprob = token_logprobs.mean().item()
@@ -766,7 +766,7 @@ def compute_gradient(
     shift_logits = logits[0, prompt_len - 1 : -1, :]
     response_ids = full_ids[0, prompt_len:].to(device)
 
-    log_probs = F.log_softmax(shift_logits.float(), dim=-1)
+    log_probs = F.log_softmax(shift_logits, dim=-1)
     token_logprobs = log_probs.gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
 
     loss = loss_fn(token_logprobs)
@@ -848,9 +848,13 @@ def compute_rl_batch_gradient(
     L_rl = -mean_i(advantage_i * mean_logprob_i)
     advantage_i = score_i - mean(score_batch), optionally normalized by std.
 
+    Uses per-rollout gradient accumulation so only one rollout's computation
+    graph lives in memory at a time.
+
     Returns (flat_gradient, loss_value, reward_mean, reward_std, batch_size).
     """
-    if not rl_rollouts:
+    N = len(rl_rollouts)
+    if N == 0:
         return torch.tensor(0.0, device=device), 0.0, 0.0, 0.0, 0
 
     scores = torch.tensor([r["score"] for r in rl_rollouts], device=device, dtype=torch.float32)
@@ -862,28 +866,9 @@ def compute_rl_batch_gradient(
         advantages = advantages / (score_std + 1e-8)
 
     if advantages.abs().sum() < 1e-8:
-        return torch.tensor(0.0, device=device), 0.0, float(score_mean), float(score_std), len(rl_rollouts)
+        return torch.tensor(0.0, device=device), 0.0, float(score_mean), float(score_std), N
 
-    model.zero_grad()
-
-    # Compute per-rollout mean logprob (with grad)
-    mean_logprobs = []
-    for r in rl_rollouts:
-        full_ids = torch.tensor([r["full_ids"]], device=device)
-        prompt_len = r["prompt_len"]
-
-        logits = model(full_ids).logits
-        shift_logits = logits[0, prompt_len - 1 : -1, :]
-        response_ids = full_ids[0, prompt_len:]
-
-        log_probs = F.log_softmax(shift_logits.float(), dim=-1)
-        token_logprobs = log_probs.gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
-        mean_logprobs.append(token_logprobs.mean())
-
-    stacked = torch.stack(mean_logprobs)  # (batch_size,)
-    rl_loss = -(advantages * stacked).mean()
-
-    # Gradient
+    # Select parameters once
     if param_filter == "last_n_layers":
         selected = _get_last_n_layers_params(model, n_layers=3)
         param_list = [p for _, p in selected] if selected else []
@@ -891,23 +876,44 @@ def compute_rl_batch_gradient(
         param_list = _get_trainable_params(model)
 
     if not param_list:
+        return torch.tensor(0.0, device=device), 0.0, float(score_mean), float(score_std), N
+
+    # Per-rollout gradient accumulation: ∇L = -(1/N) * sum_i(advantage_i * ∇mean_logprob_i)
+    accumulated_grads = [torch.zeros_like(p) for p in param_list]
+    rl_loss_val = 0.0
+
+    for i, r in enumerate(rl_rollouts):
         model.zero_grad()
-        return torch.tensor(0.0, device=device), rl_loss.item(), float(score_mean), float(score_std), len(rl_rollouts)
 
-    grads = torch.autograd.grad(rl_loss, param_list, retain_graph=False)
+        full_ids = torch.tensor([r["full_ids"]], device=device)
+        prompt_len = r["prompt_len"]
 
-    grad_parts = []
-    for g in grads:
-        if g is not None:
-            grad_parts.append(g.detach().flatten())
+        logits = model(full_ids).logits
+        shift_logits = logits[0, prompt_len - 1 : -1, :]
+        response_ids = full_ids[0, prompt_len:]
+
+        log_probs = F.log_softmax(shift_logits, dim=-1)
+        token_logprobs = log_probs.gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
+        mean_logprob = token_logprobs.mean()
+
+        # per_loss = -(advantage_i * mean_logprob_i) / N
+        per_loss = -(advantages[i] * mean_logprob) / N
+        rl_loss_val += per_loss.detach().item()
+
+        grads = torch.autograd.grad(per_loss, param_list, retain_graph=False)
+        for j, g in enumerate(grads):
+            if g is not None:
+                accumulated_grads[j] += g.detach()
+
+        # Free intermediates immediately
+        del logits, shift_logits, log_probs, token_logprobs, per_loss, grads
 
     model.zero_grad()
 
-    if not grad_parts:
-        return torch.tensor(0.0, device=device), rl_loss.item(), float(score_mean), float(score_std), len(rl_rollouts)
-
+    grad_parts = [g.flatten() for g in accumulated_grads]
     flat_grad = torch.cat(grad_parts)
-    return flat_grad, rl_loss.item(), float(score_mean), float(score_std), len(rl_rollouts)
+
+    return flat_grad, rl_loss_val, float(score_mean), float(score_std), N
 
 
 # ---------------------------------------------------------------------------
@@ -1054,7 +1060,7 @@ def verify_logprob_decrease(
     shift_logits = logits[0, prompt_len - 1 : -1, :]
     response_ids = full_ids[0, prompt_len:].to(device)
 
-    log_probs = F.log_softmax(shift_logits.float(), dim=-1)
+    log_probs = F.log_softmax(shift_logits, dim=-1)
     token_logprobs = log_probs.gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
 
     anti_loss = compute_anti_loss(token_logprobs, margin=anti_margin)
