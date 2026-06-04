@@ -1,0 +1,122 @@
+{
+  "args": {
+    "model_path": "/home/herring/Anti_lossRL/model/Qwen2.5-0.5B-Instruct",
+    "test_data_path": "/home/herring/Anti_lossRL/data/gsm8k_processed/test.jsonl",
+    "data_format": "",
+    "data_source": "openai/gsm8k",
+    "scoring_method": "flexible",
+    "num_prompts": 10,
+    "rollouts_per_prompt": 8,
+    "max_response_length": 512,
+    "max_prompt_length": 1024,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "anti_margin": null,
+    "num_gradient_checks": 5,
+    "num_update_checks": 3,
+    "update_lr": 1e-05,
+    "seed": 42,
+    "device": "cuda",
+    "output_dir": "./validation_results",
+    "output_ts": "20260604_174010"
+  },
+  "timestamp": "2026-06-04T17:40:10.150878",
+  "checks": {
+    "model_loaded": true,
+    "data_loaded": true,
+    "generation_diverse": true,
+    "scoring_valid": true,
+    "buffer_built": true,
+    "gradient_direction_opposite": true,
+    "logprob_decreased": true
+  },
+  "num_prompts_loaded": 10,
+  "total_rollouts": 80,
+  "avg_unique_responses": 8.0,
+  "correct_rollouts": 11,
+  "incorrect_rollouts": 69,
+  "success_rate": 0.1375,
+  "buffer_stats": {
+    "total_entries": 11,
+    "prompts_with_entries": 5,
+    "avg_entries_per_prompt": 1.1,
+    "max_entries_per_prompt": 4
+  },
+  "gradient_checks": [
+    {
+      "cosine_similarity": -1.0,
+      "grad_anti_norm": 103.5,
+      "grad_correct_norm": 103.5,
+      "direction_opposite": true,
+      "anti_loss": -5.701597690582275,
+      "correct_loss": 5.701597690582275,
+      "prompt_uid": "prompt_0"
+    },
+    {
+      "cosine_similarity": -0.99609375,
+      "grad_anti_norm": 26.5,
+      "grad_correct_norm": 26.5,
+      "direction_opposite": true,
+      "anti_loss": -2.9506523609161377,
+      "correct_loss": 2.9506523609161377,
+      "prompt_uid": "prompt_0"
+    },
+    {
+      "cosine_similarity": -1.0,
+      "grad_anti_norm": 104.5,
+      "grad_correct_norm": 104.5,
+      "direction_opposite": true,
+      "anti_loss": -5.755239486694336,
+      "correct_loss": 5.755239486694336,
+      "prompt_uid": "prompt_0"
+    },
+    {
+      "cosine_similarity": -0.99609375,
+      "grad_anti_norm": 136.0,
+      "grad_correct_norm": 136.0,
+      "direction_opposite": true,
+      "anti_loss": -6.752895832061768,
+      "correct_loss": 6.752895832061768,
+      "prompt_uid": "prompt_0"
+    },
+    {
+      "cosine_similarity": -1.0,
+      "grad_anti_norm": 133.0,
+      "grad_correct_norm": 133.0,
+      "direction_opposite": true,
+      "anti_loss": -5.912637233734131,
+      "correct_loss": 5.912637233734131,
+      "prompt_uid": "prompt_2"
+    }
+  ],
+  "logprob_decrease_checks": [
+    {
+      "logprob_before": -5.701597690582275,
+      "logprob_after": -8.61709213256836,
+      "delta": -2.915494441986084,
+      "decreased": true,
+      "grad_norm": 1481.29900080132,
+      "anti_loss": -5.701597690582275,
+      "prompt_uid": "prompt_0"
+    },
+    {
+      "logprob_before": -3.0630252361297607,
+      "logprob_after": -3.5057525634765625,
+      "delta": -0.44272732734680176,
+      "decreased": true,
+      "grad_norm": 105.95284955915206,
+      "anti_loss": -3.0630252361297607,
+      "prompt_uid": "prompt_0"
+    },
+    {
+      "logprob_before": -12.088162422180176,
+      "logprob_after": -13.837798118591309,
+      "delta": -1.7496356964111328,
+      "decreased": true,
+      "grad_norm": 753.2604512627212,
+      "anti_loss": -12.088162422180176,
+      "prompt_uid": "prompt_0"
+    }
+  ],
+  "overall_pass": true
+}

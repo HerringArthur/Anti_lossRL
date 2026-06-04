@@ -1,0 +1,65 @@
+2026-06-04 17:40:10,145 [INFO] ======================================================================
+2026-06-04 17:40:10,146 [INFO] Phase 1 — Anti-Loss Validation
+2026-06-04 17:40:10,146 [INFO] Model: /home/herring/Anti_lossRL/model/Qwen2.5-0.5B-Instruct
+2026-06-04 17:40:10,146 [INFO] Data: /home/herring/Anti_lossRL/data/gsm8k_processed/test.jsonl
+2026-06-04 17:40:10,146 [INFO] Prompts: 10, Rollouts/prompt: 8
+2026-06-04 17:40:10,146 [INFO] ======================================================================
+2026-06-04 17:40:10,150 [INFO] Loading tokenizer from /home/herring/Anti_lossRL/model/Qwen2.5-0.5B-Instruct
+2026-06-04 17:40:10,951 [INFO] Loading model from /home/herring/Anti_lossRL/model/Qwen2.5-0.5B-Instruct (bfloat16)
+2026-06-04 17:40:13,315 [INFO] Model loaded. Parameters: 494.03M, device: cuda
+2026-06-04 17:40:13,683 [INFO] Loading test data from /home/herring/Anti_lossRL/data/gsm8k_processed/test.jsonl (format: jsonl)
+2026-06-04 17:40:13,767 [INFO] Loaded 10 prompts (randomly sampled from 10)
+2026-06-04 17:40:13,767 [INFO] Generating 8 rollouts per prompt (T=1.0, top_p=0.95)
+2026-06-04 17:40:13,768 [INFO] EOS debug — tokenizer.eos_token_id=151645, tokenizer.pad_token_id=151643, model.config.eos_token_id=151645, model.generation_config.eos_token_id=[151645, 151643]
+2026-06-04 17:40:13,768 [INFO] eos_token_id is a list: [151645, 151643]
+2026-06-04 17:41:12,828 [WARNING] Prompt prompt_1 rollout 0: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [5338, 11, 1077, 594, 11047, 279, 2790, 3311, 386, 19042, 1030, 304, 806, 17822, 1573, 13125, 1447, 16, 13, 1260, 7391, 400, 16, 389, 296, 23184, 2329, 4412, 25, 3070, 3, 16, 1019, 5872, 17, 13, 5301, 9664, 3220, 11, 2670, 13125, 25, 400, 16, 15, 481, 400, 16, 284]
+2026-06-04 17:41:12,829 [WARNING] Prompt prompt_1 rollout 1: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [39814, 11, 1077, 594, 1438, 419, 3491, 1495, 1119, 9155, 7354, 1447, 16, 13, 3070, 6341, 25783, 315, 17633, 95518, 40159, 277, 15102, 702, 400, 16, 15, 382, 17, 13, 3070, 31349, 74216, 334, 510, 256, 481, 5139, 14242, 25, 17767, 220, 18, 1124, 15136, 32882, 15, 13, 20, 284]
+2026-06-04 17:41:12,830 [WARNING] Prompt prompt_1 rollout 3: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 11625, 419, 3491, 11, 582, 1184, 311, 2692, 369, 678, 279, 7049, 315, 279, 25322, 2670, 279, 3742, 11, 1573, 37614, 1246, 1753, 3220, 374, 2115, 916, 13, 5692, 748, 279, 11682, 1882, 1447, 16, 13, 3070, 47866, 279, 2790, 3311, 315, 13779, 386, 19042, 3880, 311, 7627, 25]
+2026-06-04 17:41:12,832 [WARNING] Prompt prompt_1 rollout 5: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [95456, 0, 6771, 594, 1438, 432, 1495, 3019, 14319, 29208, 382, 16, 13, 3070, 7595, 17633, 95518, 95657, 702, 400, 16, 15, 304, 806, 17822, 624, 5872, 17, 13, 3070, 10093, 54082, 369, 393, 7444, 334, 510, 256, 481, 576, 2783, 315, 220, 19, 1051, 14242, 25, 17767, 19, 1124]
+2026-06-04 17:41:46,100 [WARNING] Prompt prompt_2 rollout 5: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 1477, 700, 1246, 1657, 92100, 315, 13163, 72127, 1483, 11, 582, 1156, 1184, 311, 3535, 279, 11341, 315, 13163, 323, 25374, 315, 3015, 2661, 438, 17767, 22, 25, 16, 18, 57758, 304, 279, 11116, 382, 1986, 3363, 369, 1449, 220, 22, 92100, 315, 13163, 11, 1052, 525, 220, 16]
+2026-06-04 17:41:46,101 [WARNING] Prompt prompt_2 rollout 7: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 11625, 419, 3491, 11, 1077, 594, 1438, 432, 1495, 1119, 70028, 7354, 1447, 14374, 16246, 510, 12, 50748, 315, 30919, 320, 87, 8, 311, 9959, 320, 88, 8, 374, 220, 22, 25, 16, 18, 624, 12, 10657, 3311, 315, 30919, 284, 856, 92100, 624, 12, 10657, 3311, 315, 9959]
+2026-06-04 17:42:19,300 [WARNING] Prompt prompt_3 rollout 0: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [10061, 594, 23643, 279, 3491, 1667, 35972, 32711, 1156, 1573, 358, 3410, 458, 4734, 1372, 382, 16, 13, 3070, 6341, 15180, 95518, 220, 16, 15, 1251, 1191, 438, 28274, 624, 17, 13, 3070, 641, 13120, 18834, 334, 510, 256, 481, 8886, 28274, 1697, 33427, 82, 220, 21, 1008, 1251, 1449]
+2026-06-04 17:42:52,892 [WARNING] Prompt prompt_4 rollout 3: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 11047, 279, 2790, 2783, 315, 24891, 279, 27854, 11, 582, 1184, 311, 2908, 678, 18024, 2670, 279, 2331, 2783, 369, 279, 27854, 323, 279, 5107, 2783, 369, 279, 5300, 23969, 432, 382, 14374, 31359, 1095, 279, 11194, 315, 71208, 510, 16, 13, 3070, 3978, 8483, 3616, 15619, 15455, 334]
+2026-06-04 17:43:27,223 [WARNING] Prompt prompt_5 rollout 2: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 1477, 700, 1246, 1657, 8845, 1817, 315, 279, 2326, 36619, 16548, 11, 582, 1184, 311, 975, 1526, 279, 1995, 2661, 323, 738, 705, 37906, 27079, 382, 16, 13, 3070, 7595, 54193, 18115, 67, 95518, 6771, 17767, 431, 1124, 8, 387, 279, 1372, 315, 8845, 16548, 553, 98974, 624, 256]
+2026-06-04 17:43:27,224 [WARNING] Prompt prompt_5 rollout 4: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [10061, 594, 78064, 279, 1372, 315, 8845, 16548, 553, 4389, 438, 17767, 386, 1124, 568, 10548, 311, 279, 1995, 2661, 1447, 12, 98974, 16548, 220, 19, 20, 803, 8845, 1091, 4389, 11, 773, 582, 646, 3270, 510, 78045, 431, 284, 386, 488, 220, 19, 20, 1124, 921, 12, 98974, 1083]
+2026-06-04 17:44:34,229 [WARNING] Prompt prompt_7 rollout 4: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 11625, 419, 3491, 11, 582, 1184, 311, 8253, 1246, 1657, 11931, 1033, 8597, 64039, 13, 6771, 594, 78064, 1447, 12, 17767, 856, 1124, 8, 438, 279, 2790, 1372, 315, 11931, 15102, 304, 279, 2669, 5477, 32198, 26306, 624, 12, 17767, 379, 1124, 8, 438, 279, 1372, 315, 11931, 2669]
+2026-06-04 17:44:34,230 [WARNING] Prompt prompt_7 rollout 5: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 8253, 1246, 1657, 11931, 1033, 15102, 21206, 287, 11, 582, 1184, 311, 1438, 1495, 279, 3491, 1119, 7354, 1447, 16, 13, 3070, 28301, 1437, 279, 2790, 1372, 315, 11931, 66963, 2619, 525, 220, 21, 15, 11931, 32821, 49212, 624, 17, 13, 3070, 35, 24308, 279, 1372, 315, 11931, 1660]
+2026-06-04 17:45:08,008 [WARNING] Prompt prompt_8 rollout 1: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [10061, 594, 1438, 1495, 279, 7049, 6398, 304, 9271, 264, 14452, 3753, 382, 14374, 53720, 8483, 510, 785, 11236, 3349, 315, 279, 3343, 374, 400, 18, 20, 15, 11, 15, 15, 15, 382, 14374, 52701, 424, 40458, 320, 20, 4, 315, 400, 18, 20, 15, 11, 15, 15, 15, 982]
+2026-06-04 17:45:08,008 [WARNING] Prompt prompt_8 rollout 2: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [39814, 0, 6771, 594, 1438, 432, 1495, 3019, 553, 3019, 1447, 14374, 14822, 220, 16, 25, 20517, 279, 10657, 53720, 8483, 198, 785, 25114, 21241, 264, 74855, 11060, 518, 220, 20, 14360, 1096, 11060, 374, 9251, 311, 279, 11236, 3349, 315, 279, 3343, 624, 78045, 1124, 1318, 90, 65545, 424]
+2026-06-04 17:45:41,752 [WARNING] Prompt prompt_9 rollout 3: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 8253, 1246, 1657, 803, 18805, 82468, 23983, 1091, 43212, 11, 582, 1191, 553, 26312, 1045, 7332, 311, 39721, 1039, 3491, 1447, 12, 6771, 17767, 362, 1124, 8, 387, 279, 1372, 315, 18805, 23983, 553, 43212, 624, 12, 6771, 17767, 386, 1124, 8, 387, 279, 1372, 315, 18805, 23983, 553]
+2026-06-04 17:45:41,753 [WARNING] Prompt prompt_9 rollout 4: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [1249, 1477, 700, 1246, 1657, 803, 18805, 82468, 23983, 1091, 43212, 11, 582, 3278, 1156, 738, 705, 37906, 3118, 389, 279, 1995, 3897, 382, 10061, 510, 12, 17767, 362, 1124, 8, 284, 1372, 315, 384, 2300, 18805, 23983, 553, 43212, 624, 12, 17767, 386, 1124, 8, 284, 1372, 315, 384]
+2026-06-04 17:45:41,754 [WARNING] Prompt prompt_9 rollout 7: no EOS token found, response truncated at max_response_length=512. First 50 tokens of response: [10061, 594, 1191, 553, 6243, 705, 279, 37906, 3118, 389, 279, 3491, 5114, 1447, 16, 13, 3070, 22678, 25, 1019, 256, 481, 6771, 17767, 431, 1566, 1124, 8, 387, 279, 1372, 315, 384, 2300, 18805, 43212, 23983, 624, 256, 481, 6771, 17767, 386, 1566, 1124, 8, 387, 279, 1372, 315]
+2026-06-04 17:45:41,758 [INFO] Scoring rollouts with default_compute_score (method=flexible)...
+2026-06-04 17:45:41,760 [INFO] Scoring complete: 11 correct, 69 incorrect (rate: 13.8%)
+2026-06-04 17:45:41,762 [INFO] Saved 11 correct rollouts to validation_results/rollouts_correct_20260604_174010.jsonl
+2026-06-04 17:45:41,781 [INFO] Saved 69 incorrect rollouts to validation_results/rollouts_incorrect_20260604_174010.jsonl
+2026-06-04 17:45:41,781 [INFO] Saved 10 prompts to validation_results/prompts_20260604_174010.jsonl
+2026-06-04 17:45:41,781 [INFO] Success buffer built: 11 entries added, 0 duplicates skipped, 5 unique prompts
+2026-06-04 17:45:41,782 [INFO] Computing gradient directions...
+2026-06-04 17:45:42,179 [INFO] Gradient check: cosine=-1.0000, |g_anti|=103.5000, |g_correct|=103.5000, opposite=True
+2026-06-04 17:45:42,179 [INFO] Computing gradient directions...
+2026-06-04 17:45:42,378 [INFO] Gradient check: cosine=-0.9961, |g_anti|=26.5000, |g_correct|=26.5000, opposite=True
+2026-06-04 17:45:42,379 [INFO] Computing gradient directions...
+2026-06-04 17:45:42,567 [INFO] Gradient check: cosine=-1.0000, |g_anti|=104.5000, |g_correct|=104.5000, opposite=True
+2026-06-04 17:45:42,568 [INFO] Computing gradient directions...
+2026-06-04 17:45:42,769 [INFO] Gradient check: cosine=-0.9961, |g_anti|=136.0000, |g_correct|=136.0000, opposite=True
+2026-06-04 17:45:42,770 [INFO] Computing gradient directions...
+2026-06-04 17:45:42,997 [INFO] Gradient check: cosine=-1.0000, |g_anti|=133.0000, |g_correct|=133.0000, opposite=True
+2026-06-04 17:45:42,998 [INFO] Running single-step L_anti update (lr=1.0e-05)...
+2026-06-04 17:45:43,687 [INFO] Logprob: before=-5.7016, after=-8.6171, delta=-2.9155, decreased=True, |grad|=1481.2990
+2026-06-04 17:45:43,691 [INFO] Running single-step L_anti update (lr=1.0e-05)...
+2026-06-04 17:45:44,051 [INFO] Logprob: before=-3.0630, after=-3.5058, delta=-0.4427, decreased=True, |grad|=105.9528
+2026-06-04 17:45:44,054 [INFO] Running single-step L_anti update (lr=1.0e-05)...
+2026-06-04 17:45:44,402 [INFO] Logprob: before=-12.0882, after=-13.8378, delta=-1.7496, decreased=True, |grad|=753.2605
+2026-06-04 17:45:44,495 [INFO] Results saved to validation_results/validate_anti_loss_20260604_174010.json
+2026-06-04 17:45:44,495 [INFO] ======================================================================
+2026-06-04 17:45:44,495 [INFO] Validation Summary:
+2026-06-04 17:45:44,496 [INFO]   [PASS] model_loaded
+2026-06-04 17:45:44,496 [INFO]   [PASS] data_loaded
+2026-06-04 17:45:44,496 [INFO]   [PASS] generation_diverse
+2026-06-04 17:45:44,496 [INFO]   [PASS] scoring_valid
+2026-06-04 17:45:44,496 [INFO]   [PASS] buffer_built
+2026-06-04 17:45:44,496 [INFO]   [PASS] gradient_direction_opposite
+2026-06-04 17:45:44,496 [INFO]   [PASS] logprob_decreased
+2026-06-04 17:45:44,496 [INFO] Overall: PASS
+2026-06-04 17:45:44,496 [INFO] ======================================================================
