@@ -504,6 +504,12 @@ def score_rollouts(
         else:
             score_source = _resolve_score_source(str(data_source), data_path)
 
+        # Normalize ground_truth: convert to str and strip commas/$ so it
+        # matches the cleaned answer produced by extract_solution.
+        gt_normalized = ground_truth
+        if gt_normalized is not None:
+            gt_normalized = str(gt_normalized).replace(",", "").replace("$", "").strip()
+
         for r in rollouts:
             total += 1
             response_text = r["response_text"]
@@ -512,7 +518,7 @@ def score_rollouts(
                 score = default_compute_score(
                     data_source=score_source,
                     solution_str=response_text,
-                    ground_truth=ground_truth,
+                    ground_truth=gt_normalized,
                     method=scoring_method,
                     **scoring_kwargs,
                 )

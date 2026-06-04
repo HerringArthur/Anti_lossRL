@@ -46,6 +46,8 @@ def extract_solution(solution_str, method="strict"):
             for final_answer in reversed(answer):
                 if final_answer not in invalid_str:
                     break
+        if final_answer is not None:
+            final_answer = final_answer.replace(",", "").replace("$", "")
     return final_answer
 
 
