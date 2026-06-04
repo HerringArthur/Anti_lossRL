@@ -10,10 +10,9 @@
 #SBATCH --partition=fengl2
 set -xeuo pipefail
 
-source /seu_share/home/fenglei/213243847/miniconda3/etc/profile.d/conda.sh
-conda activate verl-agent
+source /home/herring/Anti_lossRL/.venv/bin/activate
 
-cd /seu_share2/home/fenglei/213243847/Anti_lossRL
+cd /home/herring/Anti_lossRL
 
 
 echo "=============================================================================="
@@ -25,10 +24,10 @@ echo "开始时间: $(date)"
 ### =========================================================================
 
 # Model
-MODEL_PATH=/seu_share2/home/fenglei/sharedata/Qwen2.5-7B-Instruct
+MODEL_PATH=/home/herring/Anti_lossRL/model/Qwen2.5-0.5B-Instruct
 
 # Data (GSM8K parquet)
-GSM8K_TEST_FILE=/seu_share2/home/fenglei/213243847/Anti_lossRL/data/grade-school-math/grade_school_math/data/test.jsonl
+GSM8K_TEST_FILE=/home/herring/Anti_lossRL/data/gsm8k_processed/test.jsonl
 
 # Phase 1 validation knobs
 NUM_PROMPTS=${NUM_PROMPTS:-10}
@@ -45,6 +44,8 @@ ANTI_MARGIN=${ANTI_MARGIN:-}              # empty = no margin; set to e.g. -4.0 
 NUM_GRADIENT_CHECKS=${NUM_GRADIENT_CHECKS:-5}
 NUM_UPDATE_CHECKS=${NUM_UPDATE_CHECKS:-3}
 UPDATE_LR=${UPDATE_LR:-1e-5}
+
+SCORING_METHOD=${SCORING_METHOD:-flexible}
 
 # Output
 OUTPUT_DIR=${OUTPUT_DIR:-./validation_results}
@@ -66,7 +67,7 @@ if [[ -z "$DEVICE" ]]; then
     fi
 fi
 
-PROJECT_ROOT="/seu_share2/home/fenglei/213243847/Anti_lossRL/verl"
+PROJECT_ROOT="/home/herring/Anti_lossRL/verl"
 
 ANTI_MARGIN_ARG=()
 if [[ -n "$ANTI_MARGIN" ]]; then
@@ -102,6 +103,8 @@ PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 VALIDATE_ARGS=(
     --model_path "$MODEL_PATH"
     --test_data_path "$GSM8K_TEST_FILE"
+    --data_source "openai/gsm8k"
+    --scoring_method "$SCORING_METHOD"
     --num_prompts "$NUM_PROMPTS"
     --rollouts_per_prompt "$ROLLOUTS_PER_PROMPT"
     --max_response_length "$MAX_RESPONSE_LENGTH"

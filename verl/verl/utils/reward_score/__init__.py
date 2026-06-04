@@ -44,11 +44,11 @@ def default_compute_score(
     if data_source == "openai/gsm8k":
         from . import gsm8k
 
-        res = gsm8k.compute_score(solution_str, ground_truth)
+        res = gsm8k.compute_score(solution_str, ground_truth, **kwargs)
     elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500"]:
         from . import math_reward
 
-        res = math_reward.compute_score(solution_str, ground_truth)
+        res = math_reward.compute_score(solution_str, ground_truth, **kwargs)
         # [Optional] Math-Verify Integration
         # For enhanced accuracy, consider utilizing Math-Verify (https://github.com/huggingface/Math-Verify).
         # Note: Math-Verify needs to be manually installed via pip: `pip install math-verify`.

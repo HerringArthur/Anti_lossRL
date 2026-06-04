@@ -335,10 +335,21 @@ def load_test_prompts(
 
     prompts = []
     for idx, row in df.iterrows():
-        prompt_text = row.get("prompt") or row.get("input") or row.get("question") or ""
-        if not prompt_text:
+        raw_prompt = row.get("prompt") or row.get("input") or row.get("question") or ""
+        if not raw_prompt:
             logger.warning("Row %d has no prompt text, skipping", idx)
             continue
+
+        # If the prompt field is a list of chat messages (e.g. from preprocessed
+        # data), apply the chat template to get a single tokenizable string.
+        if isinstance(raw_prompt, list):
+            prompt_text = tokenizer.apply_chat_template(
+                raw_prompt,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        else:
+            prompt_text = str(raw_prompt)
 
         tokenized = tokenizer(
             prompt_text,
@@ -474,13 +485,15 @@ def score_rollouts(
     tokenizer,
     data_path: str = "",
     data_source_override: str = "",
+    scoring_method: str = "flexible",
+    **scoring_kwargs,
 ) -> tuple[list[dict], list[dict], float]:
     """Score all rollouts, separate into correct and incorrect."""
     correct = []
     incorrect = []
     total = 0
 
-    logger.info("Scoring rollouts with default_compute_score...")
+    logger.info("Scoring rollouts with default_compute_score (method=%s)...", scoring_method)
 
     for prompt, rollouts in zip(prompts, all_rollouts):
         data_source = prompt["data_source"]
@@ -500,6 +513,8 @@ def score_rollouts(
                     data_source=score_source,
                     solution_str=response_text,
                     ground_truth=ground_truth,
+                    method=scoring_method,
+                    **scoring_kwargs,
                 )
             except Exception as e:
                 logger.warning("Scoring failed for prompt %s: %s", prompt["uid"], e)
@@ -977,6 +992,7 @@ def run_validation(args) -> dict:
         prompts, all_rollouts, tokenizer,
         data_path=args.test_data_path,
         data_source_override=args.data_source,
+        scoring_method=args.scoring_method,
     )
     results["correct_rollouts"] = len(correct)
     results["incorrect_rollouts"] = len(incorrect)
@@ -1091,6 +1107,14 @@ def parse_args():
         default="",
         help="Override data_source for scoring (e.g., openai/gsm8k, lighteval/MATH). "
         "Auto-detected from data if not set.",
+    )
+    parser.add_argument(
+        "--scoring_method",
+        type=str,
+        default="flexible",
+        choices=["strict", "flexible"],
+        help="GSM8K answer-extraction method: 'strict' requires #### delimiter, "
+        "'flexible' extracts the last number found (default: flexible).",
     )
     parser.add_argument(
         "--num_prompts",
