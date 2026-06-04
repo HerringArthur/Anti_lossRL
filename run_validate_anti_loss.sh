@@ -47,6 +47,11 @@ UPDATE_LR=${UPDATE_LR:-1e-5}
 
 SCORING_METHOD=${SCORING_METHOD:-flexible}
 
+# Gradient direction check
+DIRECTION_THRESHOLD=${DIRECTION_THRESHOLD:-0.2}
+MAX_CONFLICT_RATE=${MAX_CONFLICT_RATE:-0.5}
+NORMALIZE_ADVANTAGES=${NORMALIZE_ADVANTAGES:-true}
+
 # Output
 OUTPUT_DIR=${OUTPUT_DIR:-./validation_results}
 SEED=${SEED:-42}
@@ -116,6 +121,9 @@ VALIDATE_ARGS=(
     --update_lr "$UPDATE_LR"
     --seed "$SEED"
     --output_dir "$OUTPUT_DIR"
+    --direction_threshold "$DIRECTION_THRESHOLD"
+    --max_conflict_rate "$MAX_CONFLICT_RATE"
+    --normalize_advantages "$NORMALIZE_ADVANTAGES"
     "${ANTI_MARGIN_ARG[@]}"
     "${DEVICE_ARG[@]}"
 )
