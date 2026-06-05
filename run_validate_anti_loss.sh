@@ -53,6 +53,11 @@ MAX_CONFLICT_RATE=${MAX_CONFLICT_RATE:-0.5}
 NORMALIZE_ADVANTAGES=${NORMALIZE_ADVANTAGES:-true}
 NUM_RL_CANCELLATION_SAMPLES=${NUM_RL_CANCELLATION_SAMPLES:-8}
 
+# Constrained anti-loss budget
+TARGET_ANTI_RATIO=${TARGET_ANTI_RATIO:-0.2}
+LAMBDA_ANTI_MAX=${LAMBDA_ANTI_MAX:-1.0}
+PROJECT_CONFLICTING_ANTI_GRADIENT=${PROJECT_CONFLICTING_ANTI_GRADIENT:-true}
+
 # Output
 OUTPUT_DIR=${OUTPUT_DIR:-./validation_results}
 SEED=${SEED:-42}
@@ -126,6 +131,9 @@ VALIDATE_ARGS=(
     --max_conflict_rate "$MAX_CONFLICT_RATE"
     --normalize_advantages "$NORMALIZE_ADVANTAGES"
     --num_rl_cancellation_samples "$NUM_RL_CANCELLATION_SAMPLES"
+    --target_anti_ratio "$TARGET_ANTI_RATIO"
+    --lambda_anti_max "$LAMBDA_ANTI_MAX"
+    --project_conflicting_anti_gradient "$PROJECT_CONFLICTING_ANTI_GRADIENT"
     "${ANTI_MARGIN_ARG[@]}"
     "${DEVICE_ARG[@]}"
 )

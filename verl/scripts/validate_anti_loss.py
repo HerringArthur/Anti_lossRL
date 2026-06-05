@@ -979,7 +979,67 @@ def compute_single_rollout_pg_gradient(
 
 
 # ---------------------------------------------------------------------------
-# 2.13 Anti vs RL batch direction verification
+# 2.13 Gradient projection helper
+# ---------------------------------------------------------------------------
+
+
+def project_conflicting_gradient(
+    auxiliary_grad: torch.Tensor,
+    main_grad: torch.Tensor,
+    eps: float = 1e-12,
+) -> tuple[torch.Tensor, dict]:
+    """Remove the component of auxiliary_grad that conflicts with main_grad.
+
+    If dot(auxiliary_grad, main_grad) < 0, project out the conflicting component:
+        auxiliary_grad - (dot / ||main_grad||^2) * main_grad
+    Otherwise return auxiliary_grad unchanged.
+    """
+    dot = float(torch.dot(auxiliary_grad, main_grad).item())
+    if dot < 0:
+        main_norm_sq = float(torch.dot(main_grad, main_grad).item()) + eps
+        projection = (dot / main_norm_sq) * main_grad
+        projected = auxiliary_grad - projection
+        post_dot = float(torch.dot(projected, main_grad).item())
+        return projected, {
+            "projection_applied": True,
+            "pre_projection_dot": dot,
+            "post_projection_dot": post_dot,
+            "projected_grad_norm": float(torch.norm(projected).item()),
+        }
+    else:
+        return auxiliary_grad, {
+            "projection_applied": False,
+            "pre_projection_dot": dot,
+            "post_projection_dot": dot,
+            "projected_grad_norm": float(torch.norm(auxiliary_grad).item()),
+        }
+
+
+# ---------------------------------------------------------------------------
+# 2.14 Lambda_anti computation
+# ---------------------------------------------------------------------------
+
+
+def compute_lambda_anti(
+    anti_grad_norm: float,
+    rl_grad_norm: float,
+    target_anti_ratio: float,
+    lambda_anti_max: float,
+    eps: float = 1e-12,
+) -> float:
+    """Scale anti gradient so ||lambda * g_anti|| ~= target_anti_ratio * ||g_rl||.
+
+    lambda_anti = target_anti_ratio * rl_grad_norm / (anti_grad_norm + eps)
+    lambda_anti = min(lambda_anti, lambda_anti_max)
+    """
+    if anti_grad_norm < eps or rl_grad_norm < eps:
+        return 0.0
+    lambda_anti = target_anti_ratio * rl_grad_norm / (anti_grad_norm + eps)
+    return min(lambda_anti, lambda_anti_max)
+
+
+# ---------------------------------------------------------------------------
+# 2.15 Anti vs RL batch direction verification
 # ---------------------------------------------------------------------------
 
 
@@ -992,11 +1052,19 @@ def verify_anti_vs_rl_batch_direction(
     threshold: float = 0.2,
     normalize_advantages: bool = True,
     num_rl_cancellation_samples: int = 8,
+    target_anti_ratio: float = 0.2,
+    lambda_anti_max: float = 1.0,
+    project_conflicting: bool = True,
 ) -> dict:
     """Compare gradient of L_anti on old rollout vs RL batch gradient.
 
     Key invariant: anti_rollout and rl_rollouts are from the same prompt
     but have different rollout_ids.
+
+    Also computes constrained anti diagnostics:
+      - Project conflicting component out of g_anti
+      - Scale anti gradient to target_anti_ratio * ||g_rl|| budget
+      - Report whether constrained anti would still dominate RL
     """
     anti_full_ids = torch.tensor([anti_rollout["full_ids"]], device=device)
     anti_prompt_len = anti_rollout["prompt_len"]
@@ -1076,6 +1144,44 @@ def verify_anti_vs_rl_batch_direction(
             }
             del stacked, mean_grad, per_sample_norms, per_sample_grads
 
+    # --- constrained anti diagnostics: projection + budget scaling ---
+    constrained_info: dict[str, Any] = {}
+    if norm_anti > 1e-8 and norm_rl > 1e-8:
+        if project_conflicting:
+            g_anti_projected, proj_info = project_conflicting_gradient(g_anti, g_rl)
+        else:
+            g_anti_projected, proj_info = g_anti, {
+                "projection_applied": False,
+                "pre_projection_dot": float(torch.dot(g_anti, g_rl).item()),
+                "post_projection_dot": float(torch.dot(g_anti, g_rl).item()),
+                "projected_grad_norm": norm_anti,
+            }
+        norm_anti_projected = float(torch.norm(g_anti_projected).item())
+        lambda_anti = compute_lambda_anti(
+            norm_anti_projected, norm_rl, target_anti_ratio, lambda_anti_max
+        )
+        constrained_norm = lambda_anti * norm_anti_projected
+        constrained_ratio = constrained_norm / norm_rl if norm_rl > 1e-8 else float("inf")
+        constrained_info = {
+            **proj_info,
+            "projected_grad_anti_norm": norm_anti_projected,
+            "lambda_anti": lambda_anti,
+            "constrained_grad_anti_norm": constrained_norm,
+            "constrained_grad_norm_ratio_to_rl": constrained_ratio,
+        }
+        del g_anti_projected
+    else:
+        constrained_info = {
+            "projection_applied": False,
+            "pre_projection_dot": float("nan"),
+            "post_projection_dot": float("nan"),
+            "projected_grad_norm": float("nan"),
+            "projected_grad_anti_norm": float("nan"),
+            "lambda_anti": float("nan"),
+            "constrained_grad_anti_norm": float("nan"),
+            "constrained_grad_norm_ratio_to_rl": float("nan"),
+        }
+
     if norm_anti < 1e-8 or (norm_rl < 1e-8 and norm_rl_single < 1e-8):
         reason = "zero_advantage" if reward_std < 1e-8 else "zero_gradient"
         logger.warning(
@@ -1100,6 +1206,7 @@ def verify_anti_vs_rl_batch_direction(
             "grad_norm_ratio_anti_to_rl": norm_ratio,
             "single_sample_norm_info": single_norm_info,
             "rl_cancellation_info": cancellation_info,
+            "constrained_info": constrained_info,
             "direction_conflicting": False,
             "direction_near_orthogonal": False,
             "direction_aligned": False,
@@ -1120,11 +1227,14 @@ def verify_anti_vs_rl_batch_direction(
     logger.info(
         "Anti vs RL batch: cosine=%.4f, |g_anti|=%.4f, |g_rl|=%.4f, ratio=%.2f, "
         "conflicting=%s, near_orthogonal=%s, aligned=%s, "
-        "batch=%d, reward_mean=%.3f, reward_std=%.3f, |g_rl_single|=%.4f, single_ratio=%.2f",
+        "batch=%d, reward_mean=%.3f, reward_std=%.3f, |g_rl_single|=%.4f, single_ratio=%.2f, "
+        "lambda_anti=%.4f, constrained_ratio=%.2f",
         cosine, norm_anti, norm_rl, norm_ratio,
         direction_conflicting, direction_near_orthogonal, direction_aligned,
         batch_size, reward_mean, reward_std,
         norm_rl_single, norm_ratio_single,
+        constrained_info.get("lambda_anti", float("nan")),
+        constrained_info.get("constrained_grad_norm_ratio_to_rl", float("nan")),
     )
 
     return {
@@ -1144,6 +1254,8 @@ def verify_anti_vs_rl_batch_direction(
         "grad_rl_norm": norm_rl,
         "grad_norm_ratio_anti_to_rl": norm_ratio,
         "single_sample_norm_info": single_norm_info,
+        "rl_cancellation_info": cancellation_info,
+        "constrained_info": constrained_info,
         "direction_conflicting": direction_conflicting,
         "direction_near_orthogonal": direction_near_orthogonal,
         "direction_aligned": direction_aligned,
@@ -1154,7 +1266,7 @@ def verify_anti_vs_rl_batch_direction(
 
 
 # ---------------------------------------------------------------------------
-# 2.14 Batch anti vs batch RL direction verification
+# 2.16 Batch anti vs batch RL direction verification
 # ---------------------------------------------------------------------------
 
 
@@ -1282,7 +1394,7 @@ def verify_batch_anti_vs_rl_direction(
 
 
 # ---------------------------------------------------------------------------
-# 2.15 Single-step update verification
+# 2.17 Single-step update verification
 # ---------------------------------------------------------------------------
 
 
@@ -1469,6 +1581,9 @@ def run_validation(args) -> dict:
             threshold=args.direction_threshold,
             normalize_advantages=args.normalize_advantages,
             num_rl_cancellation_samples=args.num_rl_cancellation_samples,
+            target_anti_ratio=args.target_anti_ratio,
+            lambda_anti_max=args.lambda_anti_max,
+            project_conflicting=args.project_conflicting_anti_gradient,
         )
         gradient_checks.append(gc)
 
@@ -1502,6 +1617,14 @@ def run_validation(args) -> dict:
     cosines = [gc["cosine_similarity"] for gc in valid_gcs if not math.isnan(gc.get("cosine_similarity", float("nan")))]
     ratios = [gc["grad_norm_ratio_anti_to_rl"] for gc in valid_gcs
               if gc.get("grad_norm_ratio_anti_to_rl", float("inf")) != float("inf")]
+    constrained_ratios = [gc.get("constrained_info", {}).get("constrained_grad_norm_ratio_to_rl", float("nan"))
+                          for gc in valid_gcs
+                          if not math.isnan(gc.get("constrained_info", {}).get("constrained_grad_norm_ratio_to_rl", float("nan")))]
+    lambdas = [gc.get("constrained_info", {}).get("lambda_anti", float("nan"))
+               for gc in valid_gcs
+               if not math.isnan(gc.get("constrained_info", {}).get("lambda_anti", float("nan")))]
+    projection_applied_count = sum(1 for gc in valid_gcs
+                                   if gc.get("constrained_info", {}).get("projection_applied", False))
 
     results["gradient_direction_summary"] = {
         "measured_check_count": measured_count,
@@ -1512,6 +1635,9 @@ def run_validation(args) -> dict:
         "aligned_count": aligned_count,
         "mean_cosine": float(np.mean(cosines)) if cosines else float("nan"),
         "mean_grad_norm_ratio_anti_to_rl": float(np.mean(ratios)) if ratios else float("nan"),
+        "mean_constrained_grad_norm_ratio_to_rl": float(np.mean(constrained_ratios)) if constrained_ratios else float("nan"),
+        "projection_applied_count": projection_applied_count,
+        "mean_lambda_anti": float(np.mean(lambdas)) if lambdas else float("nan"),
     }
 
     results["checks"]["anti_rl_gradient_measured"] = measured_count > 0
@@ -1667,6 +1793,26 @@ def parse_args():
         default=8,
         help="Max number of per-rollout RL gradients to compute for cancellation "
         "diagnostic (default: 8)",
+    )
+    parser.add_argument(
+        "--target_anti_ratio",
+        type=float,
+        default=0.2,
+        help="Target ratio ||lambda * g_anti|| / ||g_rl|| for constrained anti "
+        "budget (default: 0.2)",
+    )
+    parser.add_argument(
+        "--lambda_anti_max",
+        type=float,
+        default=1.0,
+        help="Maximum lambda_anti cap for constrained gradient (default: 1.0)",
+    )
+    parser.add_argument(
+        "--project_conflicting_anti_gradient",
+        type=bool,
+        default=True,
+        help="Remove anti gradient component that conflicts with RL direction "
+        "before computing lambda_anti (default: True)",
     )
     parser.add_argument(
         "--num_update_checks",
