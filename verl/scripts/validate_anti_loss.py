@@ -466,8 +466,10 @@ def generate_rollouts(
                     prompt["uid"], i, max_response_length, response_ids[:50],
                 )
 
+            rollout_id = f"{prompt['uid']}_r{i}"
             prompt_rollouts.append(
                 {
+                    "rollout_id": rollout_id,
                     "response_ids": response_ids,
                     "response_text": response_text_for_scoring,
                     "full_ids": full_ids,
@@ -533,6 +535,7 @@ def score_rollouts(
                 score = 0.0
 
             entry = {
+                "rollout_id": r["rollout_id"],
                 "prompt_uid": prompt["uid"],
                 "prompt_text": prompt["prompt_text"],
                 "prompt_ids": prompt["input_ids"],
@@ -801,8 +804,8 @@ def compute_gradient(
 
 
 def same_full_ids(a: dict, b: dict) -> bool:
-    """Check whether two rollout entries have identical token sequences."""
-    return a["full_ids"] == b["full_ids"]
+    """Check whether two rollout entries are identical by rollout_id."""
+    return a["rollout_id"] == b["rollout_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -814,21 +817,17 @@ def build_rl_batch_for_anti_sample(
     anti_rollout: dict,
     all_scored_rollouts: list[dict],
 ) -> list[dict]:
-    """Build RL batch for one anti sample, excluding matching full_ids.
+    """Build RL batch for one anti sample: same prompt, different rollout.
 
-    Priority: same-prompt rollouts first, then other-prompt rollouts.
+    Uses rollout_id (O(1)) for identity comparison.
+    Only includes rollouts from the same prompt as the anti rollout.
     """
-    anti_ids = anti_rollout["full_ids"]
+    anti_rid = anti_rollout["rollout_id"]
     anti_uid = anti_rollout["prompt_uid"]
 
-    # Exclude the anti rollout itself (exact token match)
-    filtered = [r for r in all_scored_rollouts if r["full_ids"] != anti_ids]
-
-    # Sort: same prompt first, then other prompts
-    same_prompt = [r for r in filtered if r["prompt_uid"] == anti_uid]
-    other_prompt = [r for r in filtered if r["prompt_uid"] != anti_uid]
-
-    return same_prompt + other_prompt
+    # Same prompt only, exclude the anti rollout itself
+    return [r for r in all_scored_rollouts
+            if r["prompt_uid"] == anti_uid and r["rollout_id"] != anti_rid]
 
 
 # ---------------------------------------------------------------------------
@@ -932,7 +931,8 @@ def verify_anti_vs_rl_batch_direction(
 ) -> dict:
     """Compare gradient of L_anti on old rollout vs RL batch gradient.
 
-    Key invariant: anti_rollout.full_ids must not appear in rl_rollouts.
+    Key invariant: anti_rollout and rl_rollouts are from the same prompt
+    but have different rollout_ids.
     """
     anti_full_ids = torch.tensor([anti_rollout["full_ids"]], device=device)
     anti_prompt_len = anti_rollout["prompt_len"]
@@ -950,12 +950,11 @@ def verify_anti_vs_rl_batch_direction(
         model, rl_rollouts, device=device, normalize_advantages=normalize_advantages
     )
 
-    # Diagnostic counts
+    # Diagnostic fields: all rl_rollouts share the same prompt as the anti rollout
     anti_uid = anti_rollout["prompt_uid"]
-    anti_text = anti_rollout.get("response_text", "")[:200]  # truncated for JSON readability
-    same_prompt_count = sum(1 for r in rl_rollouts if r["prompt_uid"] == anti_uid)
-    other_prompt_count = batch_size - same_prompt_count
-    rl_batch_uids = [r["prompt_uid"] for r in rl_rollouts]
+    anti_rid = anti_rollout["rollout_id"]
+    anti_text = anti_rollout.get("response_text", "")[:200]
+    rl_batch_rollout_ids = [r["rollout_id"] for r in rl_rollouts]
     rl_batch_scores = [r["score"] for r in rl_rollouts]
 
     norm_anti = float(torch.norm(g_anti).item())
@@ -969,12 +968,11 @@ def verify_anti_vs_rl_batch_direction(
         )
         return {
             "anti_prompt_uid": anti_uid,
+            "anti_rollout_id": anti_rid,
             "anti_response_text": anti_text,
-            "rl_batch_prompt_uids": rl_batch_uids,
+            "rl_batch_rollout_ids": rl_batch_rollout_ids,
             "rl_batch_scores": rl_batch_scores,
             "rl_batch_size": batch_size,
-            "rl_same_prompt_count": same_prompt_count,
-            "rl_other_prompt_count": other_prompt_count,
             "rl_reward_mean": reward_mean,
             "rl_reward_std": reward_std,
             "cosine_similarity": float("nan"),
@@ -999,21 +997,19 @@ def verify_anti_vs_rl_batch_direction(
     logger.info(
         "Anti vs RL batch: cosine=%.4f, |g_anti|=%.4f, |g_rl|=%.4f, "
         "conflicting=%s, near_orthogonal=%s, aligned=%s, "
-        "batch=%d (same_prompt=%d, other=%d), reward_mean=%.3f, reward_std=%.3f",
+        "batch=%d, reward_mean=%.3f, reward_std=%.3f",
         cosine, norm_anti, norm_rl,
         direction_conflicting, direction_near_orthogonal, direction_aligned,
-        batch_size, same_prompt_count, other_prompt_count,
-        reward_mean, reward_std,
+        batch_size, reward_mean, reward_std,
     )
 
     return {
         "anti_prompt_uid": anti_uid,
+        "anti_rollout_id": anti_rid,
         "anti_response_text": anti_text,
-        "rl_batch_prompt_uids": rl_batch_uids,
+        "rl_batch_rollout_ids": rl_batch_rollout_ids,
         "rl_batch_scores": rl_batch_scores,
         "rl_batch_size": batch_size,
-        "rl_same_prompt_count": same_prompt_count,
-        "rl_other_prompt_count": other_prompt_count,
         "rl_reward_mean": reward_mean,
         "rl_reward_std": reward_std,
         "cosine_similarity": cosine,
