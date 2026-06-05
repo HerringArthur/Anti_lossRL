@@ -854,7 +854,7 @@ def compute_rl_batch_gradient(
     """
     N = len(rl_rollouts)
     if N == 0:
-        return torch.tensor(0.0, device=device), 0.0, 0.0, 0.0, 0
+        return torch.tensor(0.0, device=device), 0.0, 0.0, 0.0, 0.0, 0.0, 0
 
     scores = torch.tensor([r["score"] for r in rl_rollouts], device=device, dtype=torch.float32)
     score_mean = scores.mean()
@@ -865,7 +865,7 @@ def compute_rl_batch_gradient(
         advantages = advantages / (score_std + 1e-8)
 
     if advantages.abs().sum() < 1e-8:
-        return torch.tensor(0.0, device=device), 0.0, float(score_mean), float(score_std), N
+        return torch.tensor(0.0, device=device), 0.0, float(score_mean), float(score_std), 0.0, 0.0, N
 
     # Select parameters once
     if param_filter == "last_n_layers":
@@ -875,7 +875,7 @@ def compute_rl_batch_gradient(
         param_list = _get_trainable_params(model)
 
     if not param_list:
-        return torch.tensor(0.0, device=device), 0.0, float(score_mean), float(score_std), N
+        return torch.tensor(0.0, device=device), 0.0, float(score_mean), float(score_std), 0.0, 0.0, N
 
     # Per-rollout gradient accumulation: ∇L = -(1/N) * sum_i(advantage_i * ∇mean_logprob_i)
     accumulated_grads = [torch.zeros_like(p) for p in param_list]
@@ -912,11 +912,74 @@ def compute_rl_batch_gradient(
     grad_parts = [g.flatten() for g in accumulated_grads]
     flat_grad = torch.cat(grad_parts)
 
-    return flat_grad, rl_loss_val, float(score_mean), float(score_std), N
+    advantage_mean = float(advantages.mean())
+    advantage_std = float(advantages.std())
+
+    return flat_grad, rl_loss_val, float(score_mean), float(score_std), advantage_mean, advantage_std, N
 
 
 # ---------------------------------------------------------------------------
-# 2.12 Anti vs RL batch direction verification
+# 2.12 Single-rollout policy-gradient gradient (diagnostic)
+# ---------------------------------------------------------------------------
+
+
+def compute_single_rollout_pg_gradient(
+    model: AutoModelForCausalLM,
+    rollout: dict,
+    advantage: float,
+    param_filter: str = "last_n_layers",
+    device: str = "cuda",
+) -> tuple[torch.Tensor, float]:
+    """Compute policy-gradient gradient for a single rollout with a given advantage.
+
+    L_single = -(advantage * mean_logprob)
+    Returns (flat_gradient, loss_value).
+
+    Used to compare single-sample gradient norms against batch-level norms.
+    """
+    full_ids = torch.tensor([rollout["full_ids"]], device=device)
+    prompt_len = rollout["prompt_len"]
+
+    model.zero_grad()
+
+    logits = model(full_ids).logits
+    shift_logits = logits[0, prompt_len - 1 : -1, :]
+    response_ids = full_ids[0, prompt_len:]
+
+    log_probs = F.log_softmax(shift_logits, dim=-1)
+    token_logprobs = log_probs.gather(-1, response_ids.unsqueeze(-1)).squeeze(-1)
+    mean_logprob = token_logprobs.mean()
+
+    loss = -(advantage * mean_logprob)
+
+    if param_filter == "last_n_layers":
+        selected = _get_last_n_layers_params(model, n_layers=3)
+        param_list = [p for _, p in selected] if selected else []
+    else:
+        param_list = _get_trainable_params(model)
+
+    if not param_list:
+        model.zero_grad()
+        return torch.tensor(0.0, device=device), loss.item()
+
+    grads = torch.autograd.grad(loss, param_list, retain_graph=False)
+
+    grad_parts = []
+    for g in grads:
+        if g is not None:
+            grad_parts.append(g.detach().flatten())
+
+    model.zero_grad()
+
+    if not grad_parts:
+        return torch.tensor(0.0, device=device), loss.item()
+
+    flat_grad = torch.cat(grad_parts)
+    return flat_grad, loss.item()
+
+
+# ---------------------------------------------------------------------------
+# 2.13 Anti vs RL batch direction verification
 # ---------------------------------------------------------------------------
 
 
@@ -928,6 +991,7 @@ def verify_anti_vs_rl_batch_direction(
     device: str = "cuda",
     threshold: float = 0.2,
     normalize_advantages: bool = True,
+    num_rl_cancellation_samples: int = 8,
 ) -> dict:
     """Compare gradient of L_anti on old rollout vs RL batch gradient.
 
@@ -936,6 +1000,7 @@ def verify_anti_vs_rl_batch_direction(
     """
     anti_full_ids = torch.tensor([anti_rollout["full_ids"]], device=device)
     anti_prompt_len = anti_rollout["prompt_len"]
+    anti_response_len = len(anti_rollout["response_ids"])
 
     def anti_fn(lp):
         return compute_anti_loss(lp, margin=anti_margin, length_normalize=True)
@@ -946,7 +1011,7 @@ def verify_anti_vs_rl_batch_direction(
     )
 
     # RL batch gradient
-    g_rl, rl_loss_val, reward_mean, reward_std, batch_size = compute_rl_batch_gradient(
+    g_rl, rl_loss_val, reward_mean, reward_std, advantage_mean, advantage_std, batch_size = compute_rl_batch_gradient(
         model, rl_rollouts, device=device, normalize_advantages=normalize_advantages
     )
 
@@ -959,8 +1024,59 @@ def verify_anti_vs_rl_batch_direction(
 
     norm_anti = float(torch.norm(g_anti).item())
     norm_rl = float(torch.norm(g_rl).item())
+    norm_ratio = norm_anti / norm_rl if norm_rl > 1e-8 else float("inf")
 
-    if norm_anti < 1e-8 or norm_rl < 1e-8:
+    # --- single-sample diagnostic: ||g_anti|| vs ||g_rl_single|| ---
+    # Use mean absolute advantage as a representative single-sample weight.
+    single_norm_info: dict[str, Any] = {}
+    norm_rl_single = 0.0
+    norm_ratio_single = float("inf")
+    if rl_rollouts:
+        avg_abs_adv = float(torch.tensor(
+            [abs(s - reward_mean) for s in rl_batch_scores]
+        ).mean()) if rl_batch_scores else 1.0
+        g_rl_single, _ = compute_single_rollout_pg_gradient(
+            model, rl_rollouts[0], avg_abs_adv, device=device
+        )
+        norm_rl_single = float(torch.norm(g_rl_single).item())
+        norm_ratio_single = norm_anti / norm_rl_single if norm_rl_single > 1e-8 else float("inf")
+        single_norm_info = {
+            "norm_rl_single": norm_rl_single,
+            "norm_ratio_anti_to_rl_single": norm_ratio_single,
+        }
+        del g_rl_single
+
+    # --- RL cancellation ratio: ||mean(g_rl_i)|| / mean(||g_rl_i||) ---
+    # Small ratio → batch gradients cancel; large ratio → directionally coherent.
+    cancellation_info: dict[str, Any] = {}
+    if rl_rollouts:
+        num_cancel = min(num_rl_cancellation_samples, len(rl_rollouts))
+        per_sample_grads = []
+        for r in rl_rollouts[:num_cancel]:
+            sample_adv = r["score"] - reward_mean
+            if normalize_advantages and reward_std > 1e-8:
+                sample_adv = sample_adv / (reward_std + 1e-8)
+            g_sample, _ = compute_single_rollout_pg_gradient(
+                model, r, sample_adv, device=device
+            )
+            per_sample_grads.append(g_sample)
+
+        if per_sample_grads:
+            stacked = torch.stack(per_sample_grads)  # (num_cancel, D)
+            mean_grad = stacked.mean(dim=0)
+            per_sample_norms = torch.norm(stacked, dim=1)
+            mean_norm = float(per_sample_norms.mean().item())
+            norm_of_mean = float(torch.norm(mean_grad).item())
+            cancellation_ratio = norm_of_mean / mean_norm if mean_norm > 1e-8 else float("nan")
+            cancellation_info = {
+                "num_samples": num_cancel,
+                "mean_per_sample_norm": mean_norm,
+                "norm_of_mean_gradient": norm_of_mean,
+                "cancellation_ratio": cancellation_ratio,
+            }
+            del stacked, mean_grad, per_sample_norms, per_sample_grads
+
+    if norm_anti < 1e-8 or (norm_rl < 1e-8 and norm_rl_single < 1e-8):
         reason = "zero_advantage" if reward_std < 1e-8 else "zero_gradient"
         logger.warning(
             "Gradient norm too small: anti=%.6f, rl=%.6f, reward_std=%.6f (%s)",
@@ -969,20 +1085,27 @@ def verify_anti_vs_rl_batch_direction(
         return {
             "anti_prompt_uid": anti_uid,
             "anti_rollout_id": anti_rid,
+            "anti_response_len": anti_response_len,
             "anti_response_text": anti_text,
             "rl_batch_rollout_ids": rl_batch_rollout_ids,
             "rl_batch_scores": rl_batch_scores,
             "rl_batch_size": batch_size,
             "rl_reward_mean": reward_mean,
             "rl_reward_std": reward_std,
+            "rl_advantage_mean": advantage_mean,
+            "rl_advantage_std": advantage_std,
             "cosine_similarity": float("nan"),
             "grad_anti_norm": norm_anti,
             "grad_rl_norm": norm_rl,
+            "grad_norm_ratio_anti_to_rl": norm_ratio,
+            "single_sample_norm_info": single_norm_info,
+            "rl_cancellation_info": cancellation_info,
             "direction_conflicting": False,
             "direction_near_orthogonal": False,
             "direction_aligned": False,
             "anti_loss": anti_loss_val,
             "rl_loss": rl_loss_val,
+            "valid": False,
             "reason": reason,
         }
 
@@ -995,36 +1118,171 @@ def verify_anti_vs_rl_batch_direction(
     direction_aligned = cosine > threshold
 
     logger.info(
-        "Anti vs RL batch: cosine=%.4f, |g_anti|=%.4f, |g_rl|=%.4f, "
+        "Anti vs RL batch: cosine=%.4f, |g_anti|=%.4f, |g_rl|=%.4f, ratio=%.2f, "
         "conflicting=%s, near_orthogonal=%s, aligned=%s, "
-        "batch=%d, reward_mean=%.3f, reward_std=%.3f",
-        cosine, norm_anti, norm_rl,
+        "batch=%d, reward_mean=%.3f, reward_std=%.3f, |g_rl_single|=%.4f, single_ratio=%.2f",
+        cosine, norm_anti, norm_rl, norm_ratio,
         direction_conflicting, direction_near_orthogonal, direction_aligned,
         batch_size, reward_mean, reward_std,
+        norm_rl_single, norm_ratio_single,
     )
 
     return {
         "anti_prompt_uid": anti_uid,
         "anti_rollout_id": anti_rid,
+        "anti_response_len": anti_response_len,
         "anti_response_text": anti_text,
         "rl_batch_rollout_ids": rl_batch_rollout_ids,
         "rl_batch_scores": rl_batch_scores,
         "rl_batch_size": batch_size,
         "rl_reward_mean": reward_mean,
         "rl_reward_std": reward_std,
+        "rl_advantage_mean": advantage_mean,
+        "rl_advantage_std": advantage_std,
         "cosine_similarity": cosine,
         "grad_anti_norm": norm_anti,
         "grad_rl_norm": norm_rl,
+        "grad_norm_ratio_anti_to_rl": norm_ratio,
+        "single_sample_norm_info": single_norm_info,
         "direction_conflicting": direction_conflicting,
         "direction_near_orthogonal": direction_near_orthogonal,
         "direction_aligned": direction_aligned,
         "anti_loss": anti_loss_val,
         "rl_loss": rl_loss_val,
+        "valid": True,
     }
 
 
 # ---------------------------------------------------------------------------
-# 2.13 Single-step update verification
+# 2.14 Batch anti vs batch RL direction verification
+# ---------------------------------------------------------------------------
+
+
+def verify_batch_anti_vs_rl_direction(
+    model: AutoModelForCausalLM,
+    anti_rollouts: list[dict],
+    rl_rollouts: list[dict],
+    anti_margin: float | None,
+    device: str = "cuda",
+    threshold: float = 0.2,
+    normalize_advantages: bool = True,
+) -> dict:
+    """Compare average g_anti across multiple anti rollouts vs full RL batch gradient.
+
+    This is the fairest batch-level magnitude comparison:
+      g_anti_batch = mean_j grad(L_anti(old_success_j))
+      g_rl_batch    = grad(L_rl(current_batch))
+    """
+    N_anti = len(anti_rollouts)
+    N_rl = len(rl_rollouts)
+
+    if N_anti == 0:
+        return {
+            "num_anti_rollouts": 0,
+            "num_rl_rollouts": N_rl,
+            "cosine_similarity": float("nan"),
+            "grad_anti_norm": float("nan"),
+            "grad_rl_norm": float("nan"),
+            "grad_norm_ratio_anti_to_rl": float("nan"),
+            "direction_conflicting": False,
+            "direction_near_orthogonal": False,
+            "direction_aligned": False,
+            "valid": False,
+            "reason": "no_anti_rollouts",
+        }
+
+    # Compute g_anti for each anti rollout and average
+    def anti_fn(lp):
+        return compute_anti_loss(lp, margin=anti_margin, length_normalize=True)
+
+    g_anti_list = []
+    anti_losses = []
+    for ar in anti_rollouts:
+        full_ids = torch.tensor([ar["full_ids"]], device=device)
+        g_a, loss_a = compute_gradient(
+            model, full_ids, ar["prompt_len"], anti_fn, device=device
+        )
+        g_anti_list.append(g_a)
+        anti_losses.append(loss_a)
+
+    # Stack and average: g_anti_batch = mean_j(g_anti_j)
+    g_anti_stacked = torch.stack(g_anti_list)
+    g_anti_mean = g_anti_stacked.mean(dim=0)
+
+    # Compute g_rl from the full RL batch
+    g_rl, rl_loss_val, reward_mean, reward_std, advantage_mean, advantage_std, batch_size = (
+        compute_rl_batch_gradient(
+            model, rl_rollouts, device=device, normalize_advantages=normalize_advantages
+        )
+    )
+
+    norm_anti = float(torch.norm(g_anti_mean).item())
+    norm_rl = float(torch.norm(g_rl).item())
+    norm_ratio = norm_anti / norm_rl if norm_rl > 1e-8 else float("inf")
+
+    anti_loss_mean = float(np.mean(anti_losses))
+
+    if norm_anti < 1e-8 or norm_rl < 1e-8:
+        reason = "zero_gradient"
+        if reward_std < 1e-8 and norm_rl < 1e-8:
+            reason = "zero_advantage"
+        return {
+            "num_anti_rollouts": N_anti,
+            "num_rl_rollouts": N_rl,
+            "anti_loss_mean": anti_loss_mean,
+            "rl_loss": rl_loss_val,
+            "rl_reward_mean": reward_mean,
+            "rl_reward_std": reward_std,
+            "cosine_similarity": float("nan"),
+            "grad_anti_norm": norm_anti,
+            "grad_rl_norm": norm_rl,
+            "grad_norm_ratio_anti_to_rl": norm_ratio,
+            "direction_conflicting": False,
+            "direction_near_orthogonal": False,
+            "direction_aligned": False,
+            "valid": False,
+            "reason": reason,
+        }
+
+    cosine = float(
+        (torch.dot(g_anti_mean, g_rl) / (norm_anti * norm_rl)).item()
+    )
+
+    direction_conflicting = cosine < -threshold
+    direction_near_orthogonal = abs(cosine) <= threshold
+    direction_aligned = cosine > threshold
+
+    logger.info(
+        "Batch anti vs RL: cosine=%.4f, |g_anti_batch|=%.4f, |g_rl_batch|=%.4f, "
+        "ratio=%.2f, conflicting=%s, near_orthogonal=%s, aligned=%s, "
+        "N_anti=%d, N_rl=%d, rl_reward_mean=%.3f, rl_reward_std=%.3f",
+        cosine, norm_anti, norm_rl, norm_ratio,
+        direction_conflicting, direction_near_orthogonal, direction_aligned,
+        N_anti, N_rl, reward_mean, reward_std,
+    )
+
+    del g_anti_stacked, g_anti_mean, g_rl
+
+    return {
+        "num_anti_rollouts": N_anti,
+        "num_rl_rollouts": N_rl,
+        "anti_loss_mean": anti_loss_mean,
+        "rl_loss": rl_loss_val,
+        "rl_reward_mean": reward_mean,
+        "rl_reward_std": reward_std,
+        "cosine_similarity": cosine,
+        "grad_anti_norm": norm_anti,
+        "grad_rl_norm": norm_rl,
+        "grad_norm_ratio_anti_to_rl": norm_ratio,
+        "direction_conflicting": direction_conflicting,
+        "direction_near_orthogonal": direction_near_orthogonal,
+        "direction_aligned": direction_aligned,
+        "valid": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 2.15 Single-step update verification
 # ---------------------------------------------------------------------------
 
 
@@ -1210,17 +1468,55 @@ def run_validation(args) -> dict:
             device=device,
             threshold=args.direction_threshold,
             normalize_advantages=args.normalize_advantages,
+            num_rl_cancellation_samples=args.num_rl_cancellation_samples,
         )
         gradient_checks.append(gc)
 
     results["gradient_checks"] = gradient_checks
-    valid_checks = len(gradient_checks)
-    conflict_count = sum(
-        1 for gc in gradient_checks if gc.get("direction_conflicting", False)
+
+    # --- Batch anti vs batch RL direction ---
+    # Compare average g_anti across multiple anti rollouts vs full RL batch.
+    batch_anti_rollouts = correct[: min(args.num_gradient_checks, len(correct))]
+    batch_anti_ids = {ar["rollout_id"] for ar in batch_anti_rollouts}
+    batch_rl_rollouts = [r for r in all_scored_rollouts if r["rollout_id"] not in batch_anti_ids]
+
+    batch_comparison = verify_batch_anti_vs_rl_direction(
+        model,
+        batch_anti_rollouts,
+        batch_rl_rollouts,
+        anti_margin=args.anti_margin,
+        device=device,
+        threshold=args.direction_threshold,
+        normalize_advantages=args.normalize_advantages,
     )
-    conflict_rate = conflict_count / valid_checks if valid_checks > 0 else 1.0
+    results["batch_anti_vs_rl"] = batch_comparison
+
+    # --- Summary: gradient direction diagnostics ---
+    valid_gcs = [gc for gc in gradient_checks if gc.get("valid", False)]
+    valid_count = len(valid_gcs)
+    measured_count = len(gradient_checks)
+    conflict_count = sum(1 for gc in valid_gcs if gc.get("direction_conflicting", False))
+    near_orthogonal_count = sum(1 for gc in valid_gcs if gc.get("direction_near_orthogonal", False))
+    aligned_count = sum(1 for gc in valid_gcs if gc.get("direction_aligned", False))
+    conflict_rate = conflict_count / max(valid_count, 1)
+    cosines = [gc["cosine_similarity"] for gc in valid_gcs if not math.isnan(gc.get("cosine_similarity", float("nan")))]
+    ratios = [gc["grad_norm_ratio_anti_to_rl"] for gc in valid_gcs
+              if gc.get("grad_norm_ratio_anti_to_rl", float("inf")) != float("inf")]
+
+    results["gradient_direction_summary"] = {
+        "measured_check_count": measured_count,
+        "valid_check_count": valid_count,
+        "conflict_count": conflict_count,
+        "conflict_rate": conflict_rate,
+        "near_orthogonal_count": near_orthogonal_count,
+        "aligned_count": aligned_count,
+        "mean_cosine": float(np.mean(cosines)) if cosines else float("nan"),
+        "mean_grad_norm_ratio_anti_to_rl": float(np.mean(ratios)) if ratios else float("nan"),
+    }
+
+    results["checks"]["anti_rl_gradient_measured"] = measured_count > 0
     results["checks"]["anti_rl_gradient_compatible"] = (
-        valid_checks > 0 and conflict_rate <= args.max_conflict_rate
+        valid_count > 0 and conflict_rate <= args.max_conflict_rate
     )
 
     # --- Check 9 & 10: Single-step update ---
@@ -1364,6 +1660,13 @@ def parse_args():
         default=True,
         help="Normalize RL advantages by std before computing batch gradient "
         "(default: True)",
+    )
+    parser.add_argument(
+        "--num_rl_cancellation_samples",
+        type=int,
+        default=8,
+        help="Max number of per-rollout RL gradients to compute for cancellation "
+        "diagnostic (default: 8)",
     )
     parser.add_argument(
         "--num_update_checks",
